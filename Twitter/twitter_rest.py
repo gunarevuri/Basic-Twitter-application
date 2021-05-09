@@ -60,6 +60,23 @@ def Check_user(user:str):
     except Exception as e:
         print(e)
         return False
+    
+def parse_document(doc):
+    try:
+        client = pymongo.MongoClient(host='0.0.0.0',port=27017)
+        db = client.get_database('Twitter_DB')
+        user_col = db.get_collection(name='Users',write_concern=WriteConcern(w='majority'),read_concern=ReadConcern(level='majority'))
+        posts_col = db.get_collection(name='Posts',write_concern=WriteConcern(w='majority'),read_concern=ReadConcern(level='majority'))
+        
+        if not doc.get('num_posts',None):
+            num_posts = posts_col.count_documents({"posted_by":user})
+            doc['num_posts'] = num_posts
+    except Exception as e:
+        print(e)
+    finally:
+        client.close()
+        
+        
 
 @app.route('/users/', methods=['GET','POST'])
 def get_user():
@@ -217,9 +234,25 @@ def user_post(user):
             if not any([text]):
                 return jsonify({"Message":"Doesn't satisfy all the required fields"}),200
             try:
-                posts_col.insert_one({"text":text,"posted_by":posted_by,"date_created":datetime.datetime.now(),"schemaVersion":schemaVersion})
+                
                 query = {"_id":user}
-                users_col.find_one_and_update()
+                update = {"$inc":{"num_posts":+1}}
+                num_posts = posts_col.count_documents({"posted_by":user})
+                update_num_posts = {"$set":{"num_posts":num_posts+1}}
+                
+                user_doc = users_col.find_one(query)
+                if not user_doc.get('num_posts',None):
+                    # check if num_posts field not present in users doc
+                    user_doc['num_posts'] = num_posts+1
+                    posts_col.insert_one({"text":text,"posted_by":posted_by,"date_created":datetime.datetime.now(),"schemaVersion":schemaVersion})
+                    print("post inserted")
+                    users_col.find_one_and_update(filter=query,update=update_num_posts)
+                    print("user num posted updated")
+                else:
+                    posts_col.insert_one({"text":text,"posted_by":posted_by,"date_created":datetime.datetime.now(),"schemaVersion":schemaVersion})
+                    users_col.find_one_and_update(filter=query,update=update)
+                
+                
                 return jsonify({"Message":"Post created"}),201
             except DuplicateKeyError:
                 response = {"Message":"A Post with Same Id already exist"}
